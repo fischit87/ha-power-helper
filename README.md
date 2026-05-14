@@ -1,4 +1,12 @@
 # ⚡ powerHELPER
+**a little Home Assistant integration for power flows**
+
+![HACS Badge](https://img.shields.io/badge/HACS-custom-orange?style=flat-square&logo=homeassistantcommunitystore&logoColor=white&link=https%3A%2F%2Fhacs.xyz%2F)
+![GitHub Release](https://img.shields.io/github/v/release/Dennis90BW/ha-power-helper?style=flat-square&logo=github&link=https%3A%2F%2Fgithub.com%2FDennis90BW%2Fha-power-helper%2Freleases)
+![GitHub License](https://img.shields.io/github/license/Dennis90BW/ha-power-helper?style=flat-square)
+![Installs Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fanalytics.home-assistant.io%2Fcustom_integrations.json&query=%24.power_helper.total&suffix=%20installs&style=flat-square&logo=home-assistant&logoColor=white&label=usage)
+![Code size](https://img.shields.io/github/languages/code-size/Dennis90BW/ha-power-helper?style=flat-square&logo=python&logoColor=white)
+
 
 🇩🇪 [Deutsch](README_de.md) | 🇺🇸 [English](README.md)
 
