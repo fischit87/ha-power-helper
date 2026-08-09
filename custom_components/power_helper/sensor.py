@@ -29,12 +29,16 @@ def power_values_in_watt(
 ) -> list[float]:
     """Return each source value in Watt."""
     data = entry.options or entry.data
-    invert = source == data.get("akku_leistung") and data.get(
-        "akku_leistung_invertiert", False
+    source_entities = entity_ids(source)
+    battery_entities = entity_ids(data.get("akku_leistung"))
+    invert = (
+        data.get("akku_leistung_invertiert", False)
+        and source_entities
+        and all(entity_id in battery_entities for entity_id in source_entities)
     )
     values = []
 
-    for entity_id in entity_ids(source):
+    for entity_id in source_entities:
         try:
             state = hass.states.get(entity_id)
             if state is None or state.state in (None, "unknown", "unavailable"):
@@ -149,6 +153,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     # ==================== BATTERY ====================
 
     if data.get("akku_leistung") and not (data.get("akku_laden") and data.get("akku_entladen")):
+        battery_power_entities = entity_ids(data["akku_leistung"])
         sensors += [
             ProxyPowerSensor(hass, source_entity=data["akku_leistung"], entry=entry, key="akku_leistung"),
             InvertedPowerSensor(hass, source_entity=data["akku_leistung"], entry=entry, key="akku_leistung_inv"),
@@ -167,11 +172,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 positive=False,
             ),
         ]
+        for number, source_entity in enumerate(battery_power_entities, start=1):
+            sensors += [
+                IndividualBatterySensor(
+                    hass,
+                    source_entity=source_entity,
+                    entry=entry,
+                    number=number,
+                    incoming=True,
+                    signed=True,
+                ),
+                IndividualBatterySensor(
+                    hass,
+                    source_entity=source_entity,
+                    entry=entry,
+                    number=number,
+                    incoming=False,
+                    signed=True,
+                ),
+            ]
 
     if not data.get("akku_leistung") and (data.get("akku_laden") and data.get("akku_entladen")):
+        battery_charge_entities = entity_ids(data["akku_laden"])
+        battery_discharge_entities = entity_ids(data["akku_entladen"])
         sensors += [
-            ProxyPowerSensor(hass, source_entity=data["akku_laden"], entry=entry, key="akku_laden"),
-            ProxyPowerSensor(hass, source_entity=data["akku_entladen"], entry=entry, key="akku_entladen"),
+            ProxyPowerSensor(
+                hass,
+                source_entity=data["akku_laden"],
+                entry=entry,
+                key="akku_laden",
+                enabled_default=True,
+            ),
+            ProxyPowerSensor(
+                hass,
+                source_entity=data["akku_entladen"],
+                entry=entry,
+                key="akku_entladen",
+                enabled_default=True,
+            ),
             CombinedPowerSensor(
                 hass,
                 pos_entity=data["akku_entladen"],
@@ -189,6 +227,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 ena_def=False
             ),
         ]
+        for number, (charge_entity, discharge_entity) in enumerate(
+            zip(battery_charge_entities, battery_discharge_entities), start=1
+        ):
+            sensors += [
+                IndividualBatterySensor(
+                    hass,
+                    source_entity=charge_entity,
+                    entry=entry,
+                    number=number,
+                    incoming=True,
+                    signed=False,
+                ),
+                IndividualBatterySensor(
+                    hass,
+                    source_entity=discharge_entity,
+                    entry=entry,
+                    number=number,
+                    incoming=False,
+                    signed=False,
+                ),
+            ]
 
     # ==================== FLOWS ====================
 
@@ -251,11 +310,13 @@ class BasePhSensor(SensorEntity):
 # =====================================================================
 
 class ProxyPowerSensor(BasePhSensor):
-    def __init__(self, hass, *, source_entity, entry, key):
+    def __init__(
+        self, hass, *, source_entity, entry, key, enabled_default=False
+    ):
         super().__init__(entry=entry, key=key)
         self.hass = hass
         self._source = source_entity
-        self._attr_entity_registry_enabled_default = False
+        self._attr_entity_registry_enabled_default = enabled_default
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     async def async_added_to_hass(self):
@@ -308,6 +369,55 @@ class InvertedPowerSensor(BasePhSensor):
     def _update(self):
         value = power_in_watt(self.hass, self._entry, self._source)
         self._attr_native_value = -value
+        self.async_write_ha_state()
+
+
+class IndividualBatterySensor(BasePhSensor):
+    def __init__(
+        self,
+        hass,
+        *,
+        source_entity,
+        entry,
+        number,
+        incoming,
+        signed,
+    ):
+        direction = "eingehend" if incoming else "ausgehend"
+        super().__init__(entry=entry, key=f"akku_{number}_{direction}")
+        self.hass = hass
+        self._source = source_entity
+        self._incoming = incoming
+        self._signed = signed
+        language = getattr(getattr(hass, "config", None), "language", "de")
+        if language.startswith("de"):
+            label = "Eingehend" if incoming else "Ausgehend"
+            self._attr_name = f"Batterie {number} {label}"
+        else:
+            label = "Incoming" if incoming else "Outgoing"
+            self._attr_name = f"Battery {number} {label}"
+        self._attr_translation_key = None
+
+    async def async_added_to_hass(self):
+        async_track_state_change_event(self.hass, [self._source], self._changed)
+        self._update()
+
+    @callback
+    def _changed(self, event):
+        self._update()
+
+    def _update(self):
+        if self._signed:
+            self._attr_native_value = split_power_in_watt(
+                self.hass,
+                self._entry,
+                self._source,
+                positive=not self._incoming,
+            )
+        else:
+            self._attr_native_value = power_in_watt(
+                self.hass, self._entry, self._source
+            )
         self.async_write_ha_state()
 
 # =====================================================================

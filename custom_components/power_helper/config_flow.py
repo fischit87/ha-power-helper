@@ -75,6 +75,11 @@ class PowerHelperFlowBase:
         if not total and (bool(part_a) ^ bool(part_b)):
             raise ValueError("missing_required_sensors")
 
+        # Jede Batterie benötigt genau einen Lade- und Entladesensor.
+        if isinstance(part_a, list) and isinstance(part_b, list):
+            if len(part_a) != len(part_b):
+                raise ValueError("battery_sensor_count_mismatch")
+
 
 # ============================================================
 # Config Flow (Ersteinrichtung)
