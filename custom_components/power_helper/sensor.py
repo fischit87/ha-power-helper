@@ -17,29 +17,60 @@ from .const import DOMAIN
 # HELPERS
 # =====================================================================
 
-def power_in_watt(hass: HomeAssistant, entry: ConfigEntry, entity_id: str) -> float:
-    """Return power in Watt, normalized from W / kW."""
+def entity_ids(source: str | list[str] | None) -> list[str]:
+    """Return one or multiple configured entity IDs as a list."""
+    if not source:
+        return []
+    return [source] if isinstance(source, str) else source
+
+
+def power_values_in_watt(
+    hass: HomeAssistant, entry: ConfigEntry, source: str | list[str] | None
+) -> list[float]:
+    """Return each source value in Watt."""
     data = entry.options or entry.data
-    try:
-        state = hass.states.get(entity_id)
-        if state is None or state.state in (None, "unknown", "unavailable"):
-            return 0.0
+    invert = source == data.get("akku_leistung") and data.get(
+        "akku_leistung_invertiert", False
+    )
+    values = []
 
-        value = float(state.state)
-        unit = state.attributes.get("unit_of_measurement")
+    for entity_id in entity_ids(source):
+        try:
+            state = hass.states.get(entity_id)
+            if state is None or state.state in (None, "unknown", "unavailable"):
+                continue
 
-        if unit in (UnitOfPower.KILO_WATT, "kW"):
-            return value * 1000
-        
-        # Akku-Invertierung
-        if entity_id == data.get("akku_leistung"):
-            invert = data.get("akku_leistung_invertiert", False)
-            if invert:
-                return -value
+            value = float(state.state)
+            unit = state.attributes.get("unit_of_measurement")
 
-        return value
-    except Exception:
-        return 0.0
+            if unit in (UnitOfPower.KILO_WATT, "kW"):
+                value *= 1000
+
+            values.append(-value if invert else value)
+        except Exception:
+            continue
+
+    return values
+
+
+def power_in_watt(
+    hass: HomeAssistant, entry: ConfigEntry, source: str | list[str] | None
+) -> float:
+    """Return the sum of all source values in Watt."""
+    return sum(power_values_in_watt(hass, entry, source))
+
+
+def split_power_in_watt(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    source: str | list[str] | None,
+    *,
+    positive: bool,
+) -> float:
+    """Split every source by sign before summing it."""
+    values = power_values_in_watt(hass, entry, source)
+    return sum(max(value, 0) if positive else max(-value, 0) for value in values)
+
 
 def sum_pv_power(hass: HomeAssistant, entry: ConfigEntry) -> float:
     """Return the sum of all PV sensors in Watt."""
@@ -50,8 +81,7 @@ def sum_pv_power(hass: HomeAssistant, entry: ConfigEntry) -> float:
         return 0.0
 
     # Falls nur ein einzelner Sensor angegeben wurde, in eine Liste packen
-    if isinstance(pv_sensors, str):
-        pv_sensors = [pv_sensors]
+    pv_sensors = entity_ids(pv_sensors)
 
     total = 0.0
     for sensor_id in pv_sensors:
@@ -229,7 +259,7 @@ class ProxyPowerSensor(BasePhSensor):
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     async def async_added_to_hass(self):
-        async_track_state_change_event(self.hass, [self._source], self._changed)
+        async_track_state_change_event(self.hass, entity_ids(self._source), self._changed)
         self._update()
 
     @callback
@@ -250,8 +280,7 @@ class ProxyPvSumPowerSensor(BasePhSensor):
     async def async_added_to_hass(self):
         data = self._entry.options or self._entry.data
         pv_sensors = data.get("pv_leistung") or []
-        if isinstance(pv_sensors, str):
-            pv_sensors = [pv_sensors]
+        pv_sensors = entity_ids(pv_sensors)
 
         async_track_state_change_event(self.hass, pv_sensors, self._update)
         self._update()
@@ -269,7 +298,7 @@ class InvertedPowerSensor(BasePhSensor):
         self._attr_entity_registry_enabled_default = False
 
     async def async_added_to_hass(self):
-        async_track_state_change_event(self.hass, [self._source], self._changed)
+        async_track_state_change_event(self.hass, entity_ids(self._source), self._changed)
         self._update()
 
     @callback
@@ -293,7 +322,7 @@ class SplitPowerSensor(BasePhSensor):
         self._positive = positive
 
     async def async_added_to_hass(self):
-        async_track_state_change_event(self.hass, [self._source], self._changed)
+        async_track_state_change_event(self.hass, entity_ids(self._source), self._changed)
         self._update()
 
     @callback
@@ -301,8 +330,9 @@ class SplitPowerSensor(BasePhSensor):
         self._update()
 
     def _update(self):
-        value = power_in_watt(self.hass, self._entry, self._source)
-        self._attr_native_value = max(value, 0) if self._positive else max(-value, 0)
+        self._attr_native_value = split_power_in_watt(
+            self.hass, self._entry, self._source, positive=self._positive
+        )
         self.async_write_ha_state()
 
 
@@ -315,7 +345,9 @@ class CombinedPowerSensor(BasePhSensor):
         self._attr_entity_registry_enabled_default = ena_def
 
     async def async_added_to_hass(self):
-        async_track_state_change_event(self.hass, [self._pos, self._neg], self._changed)
+        async_track_state_change_event(
+            self.hass, entity_ids(self._pos) + entity_ids(self._neg), self._changed
+        )
         self._update()
 
     @callback
@@ -343,7 +375,11 @@ class FlowPowerSensor(BasePhSensor):
     async def async_added_to_hass(self):
         async_track_state_change_event(
             self.hass,
-            [e for e in self._sources.values() if e],
+            [
+                entity_id
+                for source in self._sources.values()
+                for entity_id in entity_ids(source)
+            ],
             self._update,
         )
         self._update()
@@ -369,9 +405,15 @@ class FlowPowerSensor(BasePhSensor):
         if netz == 0 and (nb != 0 or ne != 0):
             netz = nb - ne
 
-        if akku != 0 and al == 0 and ae == 0:
-            ae = max(akku, 0)
-            al = max(-akku, 0)
+        if self._sources["akku"] and not (
+            self._sources["akku_laden"] and self._sources["akku_entladen"]
+        ):
+            ae = split_power_in_watt(
+                self.hass, self._entry, self._sources["akku"], positive=True
+            )
+            al = split_power_in_watt(
+                self.hass, self._entry, self._sources["akku"], positive=False
+            )
 
         if akku == 0 and (al != 0 or ae != 0):
             akku = ae - al

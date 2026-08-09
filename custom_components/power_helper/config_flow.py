@@ -56,9 +56,9 @@ class PowerHelperFlowBase:
     def _validate_either_or(
         self,
         *,
-        total: str | None,
-        part_a: str | None,
-        part_b: str | None,
+        total: str | list[str] | None,
+        part_a: str | list[str] | None,
+        part_b: str | list[str] | None,
         allow_empty: bool,
     ) -> None:
         # komplett leer
@@ -170,10 +170,10 @@ class PowerHelperConfigFlow(
             step_id="battery",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(CONF_BAT_POWER): self._power_selector(),
+                    vol.Optional(CONF_BAT_POWER): self._power_selector_multi(),
                     vol.Optional(CONF_BAT_INVERTED, default=False): bool,
-                    vol.Optional(CONF_BAT_CHARGE): self._power_selector(),
-                    vol.Optional(CONF_BAT_DISCHARGE): self._power_selector(),
+                    vol.Optional(CONF_BAT_CHARGE): self._power_selector_multi(),
+                    vol.Optional(CONF_BAT_DISCHARGE): self._power_selector_multi(),
                     vol.Optional(CONF_BAT_PRIO, default=False): bool,
                 }
             ),
@@ -194,7 +194,7 @@ class PowerHelperOptionsFlowHandler(
 
     def _update_optional(self, key, user_input):
         value = user_input.get(key)
-        if value in (None, ""):
+        if value in (None, "", []):
             self._data.pop(key, None)
         else:
             self._data[key] = value
@@ -310,6 +310,10 @@ class PowerHelperOptionsFlowHandler(
                     self._update_optional(key, user_input)
                 return self.async_create_entry(data=self._data)
 
+        # Alte Einzelwerte bleiben mit dem neuen Mehrfach-Selector kompatibel.
+        for key in [CONF_BAT_POWER, CONF_BAT_CHARGE, CONF_BAT_DISCHARGE]:
+            if isinstance(self._data.get(key), str):
+                self._data[key] = [self._data[key]]
 
         return self.async_show_form(
             step_id="battery",
@@ -318,7 +322,7 @@ class PowerHelperOptionsFlowHandler(
                     vol.Optional(
                         CONF_BAT_POWER,
                         default=self._data.get(CONF_BAT_POWER),
-                    ): vol.Maybe(self._power_selector()),
+                    ): vol.Maybe(self._power_selector_multi()),
                     vol.Optional(
                         CONF_BAT_INVERTED,
                         default=self._data.get(CONF_BAT_INVERTED, False),
@@ -326,11 +330,11 @@ class PowerHelperOptionsFlowHandler(
                     vol.Optional(
                         CONF_BAT_CHARGE,
                         default=self._data.get(CONF_BAT_CHARGE),
-                    ): vol.Maybe(self._power_selector()),
+                    ): vol.Maybe(self._power_selector_multi()),
                     vol.Optional(
                         CONF_BAT_DISCHARGE,
                         default=self._data.get(CONF_BAT_DISCHARGE),
-                    ): vol.Maybe(self._power_selector()),
+                    ): vol.Maybe(self._power_selector_multi()),
                     vol.Optional(
                         CONF_BAT_PRIO,
                         default=self._data.get(CONF_BAT_PRIO, False),
